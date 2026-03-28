@@ -5,9 +5,14 @@ from sys import exit
 from settings import *
 from board import Board
 
+import sysv_ipc
 
 
 class Game:
+    KEY_1 = sysv_ipc.ftok("game.py", ord("A"), True)
+    KEY_2 = sysv_ipc.ftok("game.py", ord("B"), True)
+
+
 
     def __init__(self) -> None:
         pygame.init()
@@ -22,24 +27,38 @@ class Game:
         # Game Information
         self.winner = None
         self.current_player: int = -1
+        self.player = -1
         self.game_ended = False
 
         # Initializing and drawing window
         self.display = pygame.display.set_mode((SCREEN_SIZE, SCREEN_SIZE))
-        pygame.display.set_caption("Tic Tac Toe")
         self.game_board: Board = Board(self.board)
         self.display.fill(BLACK)
         self.game_board.draw_game_board()
 
+        # Message queues
+        self.read_queue = None
+        self.write_queue = None
+        try:
+            self.read_queue = sysv_ipc.MessageQueue(self.KEY_1, sysv_ipc.IPC_CREX)
+            self.write_queue = sysv_ipc.MessageQueue(self.KEY_2, sysv_ipc.IPC_CREX)
 
+            print("Game started! You are player 1")
+
+        except sysv_ipc.ExistentialError:
+
+            self.read_queue = sysv_ipc.MessageQueue(self.KEY_2)
+            self.write_queue = sysv_ipc.MessageQueue(self.KEY_1)
+            self.player = 1
+            print("Player one already started the game, you are player 2")
+
+        pygame.display.set_caption(f"Tic Tac Toe: Player {1 if self.player == -1 else 2}")
 
     def __call__(self) -> None:
         self.run()
 
 
     def handle_turn(self, square) -> None:
-
-        
         row, col = square
         if self.board[row][col] != '-':
             print("Square is already a " + self.board[row][col])
@@ -53,13 +72,13 @@ class Game:
             
             # Change player after turn end
             self.current_player *= -1
+            self.write_queue.send(bytes((row, col)), 1)
 
 
     def check_if_game_ended(self) -> None:
         if self.game_ended == True and not self.winner:
             print("DRAW!")
             return
-
 
         for i in range(len(self.board)):
             # Check for horizontal winner
@@ -91,6 +110,7 @@ class Game:
                 self.game_board.draw_win_line_diagonal(1)
                 self.game_ended = True
                 print("Winner: " + self.winner)
+                
 
     def reset_game(self) -> None:
 
@@ -106,13 +126,62 @@ class Game:
             self.display.fill(BLACK)
             self.game_board.draw_game_board()
 
+
+    def read_message(self, read_queue):
+        try:
+            message = read_queue.receive(False, 1)
+            print(message)
+            return message
+
+        except sysv_ipc.BusyError:
+            return None
+
+        except sysv_ipc.ExistentialError:
+            print("Second player quit")
+            exit()
+
+
+    def handle_message(self):
+        message = self.read_message(self.read_queue)
+        if message is None:
+            return
+
+        x, y = tuple(message[0])
+        pos = (x, y)
+        self.handle_turn(pos)
+
+
+    def redraw_board(self):
+        empty_fields = 0
+        for i in range(len(self.board)):
+            for j in range(len(self.board[i])):
+                if self.board[i][j] == '-':
+                    empty_fields += 1
+
+                elif self.board[i][j] == "X":
+                    self.game_board.draw_x(j, i)
+                                
+                elif self.board[i][j] == "O":
+                    self.game_board.draw_o(j, i)
+
+                else:
+                    raise Execption("Board got into an invalid state!")
+                        
+        if empty_fields == 0:
+            self.game_ended = True
+
+       
+
     def run(self) -> None:
         # Main game loop
         print("Current player: ", "X" if self.current_player == -1 else "O")
         while True:
+            self.handle_message()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
+                    self.read_queue.remove()
+                    self.write_queue.remove()
                     exit()
 
                 elif event.type == pygame.KEYDOWN:
@@ -120,6 +189,8 @@ class Game:
                         self.reset_game()
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.player != self.current_player:
+                        continue 
                     if not self.winner and not self.game_ended:
                         pos = pygame.mouse.get_pos()
                         square = self.game_board.get_square_from_pos(pos)
@@ -127,23 +198,11 @@ class Game:
                         self.handle_turn(square)
                         print("Current player: ", "X" if self.current_player == -1 else "O")
 
-                        empty_fields = 0
-                        for i in range(len(self.board)):
-                            for j in range(len(self.board[i])):
-                                if self.board[i][j] == '-':
-                                    empty_fields += 1
+                 
+            self.check_if_game_ended()
 
-                                elif self.board[i][j] == "X":
-                                    self.game_board.draw_x(j, i)
-                                
-                                elif self.board[i][j] == "O":
-                                    self.game_board.draw_o(j, i)
-                        
-                        if empty_fields == 0:
-                            self.game_ended = True
-
-                        self.check_if_game_ended()
-                    
-
+            self.redraw_board()
             self.clock.tick(FPS)
             pygame.display.flip()
+
+
