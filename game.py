@@ -165,7 +165,7 @@ class Game:
                     self.game_board.draw_o(j, i)
 
                 else:
-                    raise Execption("Board got into an invalid state!")
+                    raise Exception("Board got into an invalid state!")
                         
         if empty_fields == 0:
             self.game_ended = True
